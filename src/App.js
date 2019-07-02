@@ -1,18 +1,12 @@
 import React, { Component } from 'react';
 import './App.css';
 
-let socket = null
-let klineAll = {
-  id: 8,
-  method: 'kline.query',
-  params: ['BTCUSDT', 1560686476, 1561982536, 900]
-}
-// let kline = {
-//   id: 9,
+let ws = null
+// let klineAll = {
+//   id: 8,
 //   method: 'kline.query',
 //   params: ['BTCUSDT', 1560686476, 1561982536, 900]
 // }
-
 const config = {
   supports_search: false,
   supports_group_request: false,
@@ -33,19 +27,26 @@ class App extends Component {
     super(props)
     this.state = {
       datafeed: null,
-      bars: []
+      HCk: null,
+      SUB: null,
+      historyData: [],
+      lastTime: 0
     }
   }
   componentDidMount() {
+    this.setDataFeed()
     this.webSocketInit()
   }
+  // 需要等待setDataFeed动作结束
   widgetInit = () => {
     let _this = this
     window.tvWidget = new window.TradingView.widget({
       // debug: true, 
-      fullscreen: true,
-      symbol: 'AAPL',
-      interval: 'D',
+      fullscreen: false,
+      width: 960,
+      height: 500,
+      symbol: 'BTCUSDT',
+      interval: '15',
       container_id: "App",
       // datafeed: new window.Datafeeds.UDFCompatibleDatafeed("https://demo_feed.tradingview.com"),
       datafeed: _this.state.datafeed,
@@ -59,12 +60,12 @@ class App extends Component {
       client_id: 'tradingview.com',
       user_id: 'public_user_id'
     })
-    window.addEventListener('DOMContentLoaded', this.widgetInit, false)
+    // window.addEventListener('DOMContentLoaded', this.widgetInit, false)
   }
+  // 设置配置数据
   setDataFeed = () => {
     let datafeed = {
       onReady: cb => {
-        console.log('onReady')
         setTimeout(() => {
           cb(config)
         }, 0);
@@ -72,105 +73,172 @@ class App extends Component {
       resolveSymbol: (symbolName, onSymbolResolvedCallback, onResolveErrorCallback) => {
         var symbol_stub = {
           name: symbolName,
+          ticker: symbolName,
           description: "",
           has_intraday: true,
           has_no_volume: false,
           minmov: 1,
           minmov2: 2,
-          pricescale: 100,
+          pricescale: 100000,
           session: "24x7",
-          supported_resolutions: ["1", "5", "15", "30", "60", "1D", "1W"],
-          ticker: symbolName,
+          supported_resolutions: ["1", "5", "15", "30", "60", "240", "1D", "1W", "1M"],
           timezone: "Asia/Shanghai",
           type: "stock"
         }
-        setTimeout(() => onSymbolResolvedCallback(symbol_stub), 0);
-      },
-      getBars: (symbolInfo, resolution, from, to, onHistoryCallback, onErrorCallback, firstDataRequest) => {
-        setInterval(() => {
-          let bars = this.state.bars
-          // let bars = {
-          //   time: 1561989700 * 1000,
-          //   close: '10941.13',
-          //   open: '10982.67',
-          //   high: '10989.60',
-          //   low: '10935.76',
-          //   volume: '33963.2266664469' 
-          // }
-          console.log(bars)
-          let meta = {
-            noData: false
-          }
-          setTimeout(() => {
-            onHistoryCallback(bars, meta)
-          })
+        setTimeout(() => {
+          onSymbolResolvedCallback(symbol_stub)
         }, 0)
       },
+      getBars: (symbolInfo, resolution, from, to, onHistoryCallback, onErrorCallback, firstDataRequest) => {
+        // 周期设置 -- 转换成秒
+        resolution = this.timeConversion(resolution)
+        this.setState({
+          HCK: onHistoryCallback
+        }, () => {
+          let params = [symbolInfo.name, from, to, resolution]
+          this.sendKlineQueryReq(params)
+        })
+      },
       subscribeBars: (symbolInfo, resolution, onRealtimeCallback, subscriberUID, onResetCacheNeededCallback) => {
-        // let bar = this.state.bars
-        let bar = {
-          time: 1565989700 * 1000,
-          close: '10941.13',
-          open: '10982.67',
-          high: '10989.60',
-          low: '10935.76',
-          volume: '33963.2266664469' 
-        }
-        setTimeout(() => {
-          onRealtimeCallback(bar)
-        });
+        resolution = this.timeConversion(resolution)
+        let params = [
+          symbolInfo.name,
+          resolution
+        ]
+        this.setState({
+          SUB: onRealtimeCallback
+        }, () => {
+          this.sendKlineSubReq(params)
+        })
       }
     }
     this.setState({
       datafeed
-    }, () => {
-      // setState异步，需在datafeed设置完成后调用
+    }, () =>{
       this.widgetInit()
     })
   }
+  // websocket
   webSocketInit = () => {
     if ('WebSocket' in window) {
-      if (socket === null) {
-        socket = new WebSocket('wss://socket.coinex.com/')
+      if (ws === null) {
+        ws = new WebSocket('wss://socket.coinex.com/')
       }
-      socket.onopen = () => {
+      ws.onopen = () => {
         console.log('连接成功')
-        socket.send(JSON.stringify(klineAll))
-        // socket.send(JSON.stringify(kline))
+        // ws.send(JSON.stringify(kline))
       }
-      socket.onmessage = res => {
-        this.socketUpdate(JSON.parse(res.data))
+      ws.onmessage = res => {
+        this.WSHandler(JSON.parse(res.data))
       }
-      socket.onclose = () => {
+      ws.onclose = () => {
         console.log('连接关闭')
       }
     } else {
       console.log('您的浏览器不支持websocket')
     }
   }
-  socketUpdate = res => {
+  // websocket接受数据,处理数据
+  WSHandler = res => {
     if (res.ttl === 400) {
-      let bars = res.result.slice(0, 20).map((val, i) => {
+      // 历史数据
+      let historyData = res.result.map(val => {
         return {
-          time: val[0],
-          close: val[1],
-          open: val[2],
-          high: val[3],
-          low: val[4],
-          volume: val[5]
+          time: Number(val[0]) * 1000,
+          close: Number(val[2]),
+          open: Number(val[1]),
+          high: Number(val[3]),
+          low: Number(val[4]),
+          volume: Number(val[5])
         }
       })
       this.setState({
-        bars
+        lastTime: historyData[historyData.length - 1].time,
+        historyData
       }, () => {
-        this.setDataFeed()
+        if (historyData && historyData.length) {
+          setTimeout(() => {
+            this.state.HCK(historyData, { noData: false })
+          }, 0)
+        } else {
+          this.state.HCK(historyData, { noData: true })
+        }
       })
+    } 
+    if (res.method === 'kline.update') {
+      // 实时数据
+      let bars = res.params.map(val => {
+        return {
+          time: Number(val[0]) * 1000,
+          close: Number(val[2]),
+          open: Number(val[1]),
+          high: Number(val[3]),
+          low: Number(val[4]),
+          volume: Number(val[5])
+        }
+      })[0]
+      // 对比存储的最新时间和最新数据的时间大小来更新数据
+      if (this.state.lastTime - bars.time <= 0) {
+        setTimeout(() => {
+          this.state.SUB(bars)
+        }, 0)
+      }
     }
+  }
+  // 将周期转换成秒
+  timeConversion = time => {
+    switch(time) {
+      case ('1M' || '1W' || '1D' || 'D'):
+        return 86400
+      case '240':
+        return 14400
+      case '120':
+        return 7200
+      case '60':
+        return 3600
+      case '30':
+        return 1800
+      case '15':
+        return 900
+      case '5':
+        return 300
+      case '1':
+        return 60
+      default:
+        return 86400
+    }
+  }
+  // websocket发送请求
+  sendRequest = data => {
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify(data))
+    } else {
+      ws.onopen = () => {
+        ws.send(JSON.stringify(data))
+      }
+    }
+  }
+  // 发送历史数据请求
+  sendKlineQueryReq = params => {
+    let data = {
+      id: 8,
+      method: 'kline.query',
+      params: params
+    }
+    this.sendRequest(data)
+  }
+  // 发送实时数据请求
+  sendKlineSubReq = params => {
+    let data = {
+      id: 9,
+      method: 'kline.subscribe',
+      params: params
+    }
+    this.sendRequest(data)
   }
   render() {
     return (
       <div id="App">
-        
       </div>
     );
   }
